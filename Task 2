@@ -1,0 +1,110 @@
+# Step 1: Install Required Libraries
+install.packages(c("quantmod", "forecast", "tseries", "ggplot2", "keras", "tensorflow"))
+
+# Load the libraries
+library(quantmod)   # For stock data retrieval
+library(forecast)   # For ARIMA model
+library(tseries)    # For stationarity tests
+library(ggplot2)    # For visualization
+library(keras)      # For LSTM model
+library(tensorflow)
+
+# Step 2: Load and Inspect Stock Data
+# Load historical stock data (e.g., Apple stock)
+getSymbols("AAPL", src = "yahoo", from = "2015-01-01", to = Sys.Date())
+
+# View the structure of the data
+head(AAPL)
+
+# Step 3: Data Preprocessing
+# Extract the adjusted closing prices
+stock_data <- AAPL[, "AAPL.Adjusted"]
+
+# Remove missing values
+stock_data <- na.omit(stock_data)
+
+# Step 4: Visualize the Data
+autoplot(stock_data) + ggtitle("Apple Stock Prices") + xlab("Date") + ylab("Adjusted Close")
+
+# Step 5: ARIMA Model for Time Series Forecasting
+
+# Step 5.1: Check for Stationarity
+adf_test <- adf.test(stock_data)
+print(adf_test)
+
+# If the series is non-stationary, differencing the log data
+stock_data_diff <- diff(log(stock_data))
+autoplot(stock_data_diff) + ggtitle("Differenced Log Apple Stock Prices")
+
+# Step 5.2: Fit the ARIMA Model
+fit_arima <- auto.arima(log(stock_data), seasonal = FALSE)
+summary(fit_arima)
+
+# Step 5.3: Forecast using ARIMA
+forecast_arima <- forecast(fit_arima, h = 30)
+autoplot(forecast_arima) + ggtitle("ARIMA Forecast for Apple Stock")
+
+# Step 6: LSTM Model for Stock Price Prediction
+
+# Step 6.1: Prepare Data for LSTM
+# Normalize the data
+stock_data_scaled <- scale(log(stock_data))
+
+# Split the data into training (80%) and testing sets (20%)
+train_size <- round(0.8 * length(stock_data_scaled))
+train_data <- stock_data_scaled[1:train_size]
+test_data <- stock_data_scaled[(train_size+1):length(stock_data_scaled)]
+
+# Create lagged data for LSTM input
+lag_data <- function(x, k) {
+  n <- length(x)
+  xlag <- NULL
+  for (i in (k+1):n) {
+    xlag <- rbind(xlag, x[(i-k):i])
+  }
+  return(xlag)
+}
+
+# Prepare training and testing sets with lag = 10 days
+train_matrix <- lag_data(train_data, 10)
+test_matrix <- lag_data(test_data, 10)
+
+# Split features (X) and target (Y)
+x_train <- train_matrix[, -11]
+y_train <- train_matrix[, 11]
+x_test <- test_matrix[, -11]
+y_test <- test_matrix[, 11]
+
+# Reshape the data for LSTM model input (samples, timesteps, features)
+x_train <- array(x_train, dim = c(nrow(x_train), 10, 1))
+x_test <- array(x_test, dim = c(nrow(x_test), 10, 1))
+
+# Step 6.2: Build the LSTM Model
+
+# Define the LSTM model
+model <- keras_model_sequential() %>%
+  layer_lstm(units = 50, input_shape = c(10, 1), return_sequences = TRUE) %>%
+  layer_lstm(units = 50, return_sequences = FALSE) %>%
+  layer_dense(units = 1)
+
+# Compile the model
+model %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = 'adam'
+)
+
+# Fit the LSTM model
+model %>% fit(x_train, y_train, epochs = 100, batch_size = 32)
+
+# Step 6.3: Make Predictions using LSTM
+lstm_predictions <- model %>% predict(x_test)
+
+# Step 7: Evaluate and Compare the Models
+
+# RMSE for ARIMA
+arima_rmse <- sqrt(mean((exp(forecast_arima$mean) - tail(stock_data, 30))^2))
+cat("ARIMA RMSE:", arima_rmse, "\n")
+
+# RMSE for LSTM
+lstm_rmse <- sqrt(mean((exp(lstm_predictions) - exp(y_test))^2))
+cat("LSTM RMSE:", lstm_rmse, "\n")
